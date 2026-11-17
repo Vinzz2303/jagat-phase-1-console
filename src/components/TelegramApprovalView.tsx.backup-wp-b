@@ -1,0 +1,534 @@
+import React, { useState } from 'react';
+import {
+  AlertTriangle,
+  Bot,
+  Check,
+  Edit3,
+  PauseCircle,
+  PlayCircle,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  SkipForward,
+  ZapOff,
+} from 'lucide-react';
+import type { ApprovalRecord, LeadRecord, OutboundMode, OutreachMessage } from '../phase1/types';
+
+interface TelegramApprovalViewProps {
+  approvals: ApprovalRecord[];
+  leads: LeadRecord[];
+  messages: OutreachMessage[];
+  outboundMode: OutboundMode;
+  globalPause: boolean;
+  funnelMetrics: {
+    total_leads: number;
+    pending_approval: number;
+    sent: number;
+    replied_positive: number;
+    sent_today: number;
+    max_emails_per_day: number;
+  };
+  onDecideApproval: (params: {
+    approval_id: string;
+    decision: 'APPROVED' | 'REJECTED' | 'SKIPPED';
+    edited_subject?: string;
+    edited_body?: string;
+    note?: string;
+  }) => Promise<void>;
+  onUpdateConfig: (cfg: { outbound_mode?: OutboundMode; global_pause?: boolean }) => Promise<void>;
+  onTriggerSendTest: (params: {
+    lead_id: string;
+    simulate_crash_after_smtp?: boolean;
+    bypass_approval_gate?: boolean;
+    live_smtp?: boolean;
+  }) => Promise<void>;
+  onReconcileLead: (leadId: string, resolution: 'CONFIRM_SENT' | 'RESET_TO_APPROVED') => Promise<void>;
+  busy: boolean;
+  lastActionToast: string | null;
+}
+
+export function TelegramApprovalView({
+  approvals,
+  leads,
+  messages,
+  outboundMode,
+  globalPause,
+  funnelMetrics,
+  onDecideApproval,
+  onUpdateConfig,
+  onTriggerSendTest,
+  onReconcileLead,
+  busy,
+  lastActionToast,
+}: TelegramApprovalViewProps) {
+  const [editingApprovalId, setEditingApprovalId] = useState<string | null>(null);
+  const [editSubject, setEditSubject] = useState('');
+  const [editBody, setEditBody] = useState('');
+  const [simLeadId, setSimLeadId] = useState(leads[0]?.id ?? 'lead-mutiara-001');
+
+  const pendingApprovals = approvals.filter((a) => a.decision === 'PENDING');
+  const decidedApprovals = approvals.filter((a) => a.decision !== 'PENDING');
+  const reconciliationLeads = leads.filter((l) => l.status === 'NEEDS_RECONCILIATION');
+
+  const startEditing = (appr: ApprovalRecord) => {
+    setEditingApprovalId(appr.approval_id);
+    setEditSubject(appr.subject);
+    setEditBody(appr.body_preview);
+  };
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      {/* Left 7 Cols: JAGAT G7 Assistant — Telegram Morning Report & Approval Console (Matching Goals PDF Page 2) */}
+      <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden text-slate-100 shadow-lg">
+        {/* Telegram Header */}
+        <div className="px-5 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400">
+              <Bot className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-white">JAGAT G7 Assistant</div>
+              <div className="text-xs text-slate-400">Revenue Operations · Telegram Approval Gate</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-slate-300">
+              Mode: {outboundMode}
+            </span>
+            <button
+              type="button"
+              onClick={() => onUpdateConfig({ global_pause: !globalPause })}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap ${
+                globalPause
+                  ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                  : 'bg-rose-600/90 hover:bg-rose-500 text-white'
+              }`}
+            >
+              {globalPause ? (
+                <>
+                  <PlayCircle className="w-3.5 h-3.5" />
+                  Resume Campaign
+                </>
+              ) : (
+                <>
+                  <PauseCircle className="w-3.5 h-3.5" />
+                  Pause All Outbound
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {globalPause && (
+            <div className="p-3.5 bg-rose-950/70 border border-rose-500/40 rounded-lg flex items-center justify-between gap-3">
+              <div className="text-xs text-rose-200">
+                <strong>GLOBAL PAUSE SWITCH ACTIVE:</strong> Seluruh pengiriman email outbound ditahan oleh Outreach
+                Policy Engine. Bahkan jika draft di-approve, pengiriman akan diblokir sampai pause dicabut.
+              </div>
+              <button
+                type="button"
+                onClick={() => onUpdateConfig({ global_pause: false })}
+                className="px-3 py-1.5 text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white rounded shrink-0"
+              >
+                Unpause Now
+              </button>
+            </div>
+          )}
+
+          {/* Daily Operations Report (Matching Goals PDF Page 2 layout) */}
+          <div>
+            <div className="text-xs font-semibold text-slate-300 mb-2.5">Daily Operations Report</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-4 bg-slate-800/70 border border-slate-700/70 rounded-lg">
+                <div className="text-2xl font-bold font-mono tabular-nums text-white">
+                  {funnelMetrics.total_leads}
+                </div>
+                <div className="text-xs text-slate-400 mt-1">Prospek ditemukan & diverifikasi</div>
+              </div>
+              <div className="p-4 bg-slate-800/70 border border-slate-700/70 rounded-lg">
+                <div className="text-2xl font-bold font-mono tabular-nums text-amber-400">
+                  {pendingApprovals.length}
+                </div>
+                <div className="text-xs text-slate-400 mt-1">Draft siap ditinjau (Pending Approval)</div>
+              </div>
+              <div className="p-4 bg-slate-800/70 border border-slate-700/70 rounded-lg">
+                <div className="text-2xl font-bold font-mono tabular-nums text-sky-400">
+                  {funnelMetrics.sent}
+                </div>
+                <div className="text-xs text-slate-400 mt-1">
+                  Email terkirim (Hari ini: {funnelMetrics.sent_today}/{funnelMetrics.max_emails_per_day})
+                </div>
+              </div>
+              <div className="p-4 bg-slate-800/70 border border-slate-700/70 rounded-lg">
+                <div className="text-2xl font-bold font-mono tabular-nums text-emerald-400">
+                  {funnelMetrics.replied_positive}
+                </div>
+                <div className="text-xs text-slate-400 mt-1">Balasan positif & meeting</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Pending Approvals Section */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-slate-300">
+                Butuh Persetujuanmu ({pendingApprovals.length} Draft Menunggu)
+              </h3>
+              <span className="text-[11px] font-mono text-slate-400">
+                Approve memvalidasi ulang policy & state sebelum kirim
+              </span>
+            </div>
+
+            {pendingApprovals.length === 0 ? (
+              <div className="p-6 bg-slate-800/40 border border-slate-800 rounded-lg text-center text-xs text-slate-400">
+                Semua draft prospek baru telah ditinjau. Tambahkan prospek baru di tab Pipeline untuk menguji alur
+                Telegram Approval.
+              </div>
+            ) : (
+              pendingApprovals.map((appr) => {
+                const isEditing = editingApprovalId === appr.approval_id;
+                return (
+                  <div
+                    key={appr.approval_id}
+                    className="p-4 bg-slate-800/80 border border-slate-700 rounded-lg space-y-3"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-bold text-white">{appr.company_name}</div>
+                        <div className="text-xs text-slate-400 font-mono">
+                          To: {appr.email} · Score: {appr.qualification_score}/100 · {appr.campaign_id}
+                        </div>
+                      </div>
+                      <span className="text-[11px] font-mono text-amber-400">PENDING_APPROVAL</span>
+                    </div>
+
+                    {isEditing ? (
+                      <div className="space-y-2.5 pt-1">
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">Edit Subject</label>
+                          <input
+                            type="text"
+                            value={editSubject}
+                            onChange={(e) => setEditSubject(e.target.value)}
+                            className="w-full px-3 py-1.5 text-xs bg-slate-950 border border-slate-700 rounded text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">Edit Body</label>
+                          <textarea
+                            rows={4}
+                            value={editBody}
+                            onChange={(e) => setEditBody(e.target.value)}
+                            className="w-full px-3 py-1.5 text-xs bg-slate-950 border border-slate-700 rounded text-white"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-slate-950/80 border border-slate-800 rounded space-y-1.5">
+                        <div className="text-xs font-semibold text-slate-200">{appr.subject}</div>
+                        <p className="text-xs text-slate-300 whitespace-pre-line leading-relaxed">
+                          {appr.body_preview}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Action Buttons matching Telegram inline keyboard */}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          void onDecideApproval({
+                            approval_id: appr.approval_id,
+                            decision: 'APPROVED',
+                            edited_subject: isEditing ? editSubject : undefined,
+                            edited_body: isEditing ? editBody : undefined,
+                          });
+                          setEditingApprovalId(null);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-md transition-colors"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        {isEditing ? 'Save & Approve Send' : 'Approve & Send (Staging)'}
+                      </button>
+
+                      {!isEditing ? (
+                        <button
+                          type="button"
+                          onClick={() => startEditing(appr)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 rounded-md transition-colors"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          Review / Edit Draft
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setEditingApprovalId(null)}
+                          className="px-3 py-1.5 text-xs text-slate-400 hover:text-white"
+                        >
+                          Cancel Edit
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          onDecideApproval({
+                            approval_id: appr.approval_id,
+                            decision: 'SKIPPED',
+                            note: 'Skipped for later review',
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-700/60 hover:bg-slate-700 text-slate-200 rounded-md transition-colors"
+                      >
+                        <SkipForward className="w-3.5 h-3.5" />
+                        Skip
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          onDecideApproval({
+                            approval_id: appr.approval_id,
+                            decision: 'REJECTED',
+                            note: 'Rejected & added to suppression list',
+                          })
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 rounded-md transition-colors"
+                      >
+                        <ZapOff className="w-3.5 h-3.5" />
+                        Reject & Suppress
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Right 5 Cols: Outbound Autonomy Mode, Idempotency Simulator & Crash Reconciliation */}
+      <div className="lg:col-span-5 space-y-6">
+        {/* Outbound Policy Mode Selector */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+              Outbound Autonomy Policy (Bagian 8 Blueprint)
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Mengatur perilaku pengiriman email untuk mencegah auto-send tanpa batas.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2.5">
+            {(
+              [
+                {
+                  mode: 'PREPARE',
+                  title: 'Prepare Mode (Dry-Run)',
+                  desc: 'Discovery dan draft berjalan otomatis; tidak ada email yang dikirim.',
+                },
+                {
+                  mode: 'APPROVAL',
+                  title: 'Approval Mode (Default Phase 1)',
+                  desc: 'Draft dikirim ke Telegram untuk ditinjau sebelum pengiriman SMTP.',
+                },
+                {
+                  mode: 'CONTROLLED_AUTO_SEND',
+                  title: 'Controlled Auto-Send',
+                  desc: 'Hanya segmen/template terverifikasi dengan batas harian, suppression, & rate limit.',
+                },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.mode}
+                type="button"
+                onClick={() => onUpdateConfig({ outbound_mode: item.mode })}
+                className={`p-3 rounded-lg border text-left transition-colors ${
+                  outboundMode === item.mode
+                    ? 'border-sky-500 bg-sky-500/10'
+                    : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 dark:text-slate-100">{item.title}</span>
+                  <span className="text-[11px] font-mono text-sky-600 dark:text-sky-400">{item.mode}</span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{item.desc}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Idempotency Guard & Crash Recovery Lab (Acceptance Criteria #1 & #9) */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-5 space-y-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+              Idempotency Guard & Crash Recovery Simulator
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Uji kunci deterministik <code className="font-mono">outreach:&#123;lead_id&#125;:&#123;campaign_id&#125;:initial_outreach</code> terhadap pengiriman duplikat atau worker crash pasca-SMTP.
+            </p>
+          </div>
+
+          {lastActionToast && (
+            <div className="p-3 bg-sky-500/10 border border-sky-500/30 rounded-md text-xs text-sky-700 dark:text-sky-300 font-mono">
+              {lastActionToast}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Pilih Target Prospek Uji
+              </label>
+              <select
+                aria-label="Pilih target prospek uji idempotensi"
+                value={simLeadId}
+                onChange={(e) => setSimLeadId(e.target.value)}
+                className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-md text-slate-900 dark:text-slate-100"
+              >
+                {leads.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.company_name} ({l.email}) — [{l.status}]
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  onTriggerSendTest({
+                    lead_id: simLeadId,
+                    bypass_approval_gate: true,
+                    simulate_crash_after_smtp: false,
+                    live_smtp: true,
+                  })
+                }
+                className="px-3.5 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-md transition-colors flex items-center gap-1.5 shadow-sm"
+                title="Kirim email nyata via Gmail SMTP ke email terverifikasi founder"
+              >
+                <span>⚡</span> Kirim Nyata ke Gmail Saya
+              </button>
+
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  onTriggerSendTest({
+                    lead_id: simLeadId,
+                    bypass_approval_gate: true,
+                    simulate_crash_after_smtp: false,
+                    live_smtp: false,
+                  })
+                }
+                className="px-3 py-2 text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white rounded-md transition-colors"
+                title="Simulasi Idempotency & Staging Ledger tanpa kirim email luar"
+              >
+                Test Send (Staging Mock)
+              </button>
+
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  onTriggerSendTest({
+                    lead_id: simLeadId,
+                    bypass_approval_gate: true,
+                    simulate_crash_after_smtp: true,
+                  })
+                }
+                className="px-3 py-2 text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white rounded-md transition-colors"
+              >
+                Simulate Crash After SMTP
+              </button>
+            </div>
+
+            <div className="text-[11px] text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-900/60 p-2.5 rounded border border-slate-200 dark:border-slate-800 space-y-1">
+              <p>• <strong className="text-emerald-500">Kirim Nyata ke Gmail:</strong> Mengirim email sungguhan via Gmail SMTP (Nodemailer SSL 465) langsung ke inbox &amp; folder Sent akun Gmail Mas Fatur (<code>faturachmanalkahfi7@gmail.com</code>).</p>
+              <p>• <strong className="text-sky-500">Test Send (Staging):</strong> Mensimulasikan alur &amp; menguji Idempotency Guard (anti double-send) tanpa spam ke kontak luar (Blueprint Sec 16).</p>
+            </div>
+          </div>
+
+          {/* Reconciliation Queue */}
+          {reconciliationLeads.length > 0 && (
+            <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-2.5">
+              <div className="text-xs font-bold text-amber-600 dark:text-amber-300 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4" />
+                Prospek dalam Status NEEDS_RECONCILIATION ({reconciliationLeads.length})
+              </div>
+              {reconciliationLeads.map((rl) => (
+                <div
+                  key={rl.id}
+                  className="p-2.5 bg-white dark:bg-slate-950 border border-amber-500/30 rounded flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <div>
+                    <div className="font-semibold text-slate-900 dark:text-slate-100">{rl.company_name}</div>
+                    <div className="text-[11px] font-mono text-slate-500">{rl.email}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onReconcileLead(rl.id, 'CONFIRM_SENT')}
+                      className="px-2.5 py-1 text-[11px] font-semibold bg-emerald-600 text-white rounded"
+                    >
+                      Confirm Sent
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onReconcileLead(rl.id, 'RESET_TO_APPROVED')}
+                      className="px-2.5 py-1 text-[11px] font-medium bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded"
+                    >
+                      Reset Lock
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Atomic Send Ledger Table */}
+          <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+            <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Outreach Send Ledger & Idempotency Keys ({messages.length})
+            </div>
+            <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+              {messages.map((m) => (
+                <div
+                  key={m.id}
+                  className="p-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded text-xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-[11px] font-semibold text-slate-800 dark:text-slate-200 truncate">
+                      {m.idempotency_key}
+                    </span>
+                    <span
+                      className={`font-mono text-[10px] font-semibold ${
+                        m.status === 'SENT'
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-amber-600 dark:text-amber-400'
+                      }`}
+                    >
+                      {m.status}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
+                    Hash: {m.body_hash} · MsgID: {m.provider_message_id || 'pending'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

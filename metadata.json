@@ -1,0 +1,6 @@
+{
+  "name": "JAGAT Phase 1 — Revenue & Reliability Operations Console",
+  "description": "Autonomous AI multi-agent revenue pipeline, outreach policy engine, idempotency guard, model router, and codebase audit console for JAGAT Phase 1.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
